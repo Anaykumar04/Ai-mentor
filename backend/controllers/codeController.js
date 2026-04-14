@@ -127,6 +127,39 @@ const runShellCommand = (cmd, timeoutMs = 8000) => {
   });
 };
 
+// Helper: try remote execution if local fails
+const tryRemoteExecution = async (language, code) => {
+  const pistonLangMap = {
+    python:     { language: 'python', version: '3.10.0' },
+    javascript: { language: 'javascript', version: '18.15.0' },
+    java:       { language: 'java', version: '15.0.2' },
+    cpp:        { language: 'c++',  version: '10.2.0' },
+  };
+  const pistonLang = pistonLangMap[language] || pistonLangMap['python'];
+  try {
+    const pistonRes = await axios.post('https://emkc.org/api/v2/piston/execute', {
+      language: pistonLang.language,
+      version:  pistonLang.version,
+      files: [{ content: code }],
+      stdin: '', run_timeout: 8000, compile_timeout: 10000,
+    }, { timeout: 15000 });
+
+    const runResult  = pistonRes.data.run;
+    const compResult = pistonRes.data.compile;
+    return {
+      stdout:   runResult?.stdout  || '',
+      stderr:   runResult?.stderr  || compResult?.stderr || '',
+      exitCode: runResult?.code    ?? 0,
+    };
+  } catch (pistonErr) {
+    return {
+      stdout: '',
+      stderr: `Execution Error: Local compiler not found AND remote compiler service unreachable. Please install a local compiler (like g++ or javac) or check your internet connection.`,
+      exitCode: 1,
+    };
+  }
+};
+
 exports.runCode = async (req, res) => {
   const { code, language = 'python' } = req.body;
   console.log(`[EXEC] Running ${language} code...`);
@@ -152,35 +185,49 @@ exports.runCode = async (req, res) => {
     } else if (language === 'javascript') {
       // Run JavaScript locally with Node.js
       result = await runShellCommand(`node "${tmpFile}"`);
-    } else {
-      // For Java and C++ — use Piston API as they need a compiler
-      const pistonLangMap = {
-        java: { language: 'java', version: '15.0.2' },
-        cpp:  { language: 'c++',  version: '10.2.0' },
-      };
-      const pistonLang = pistonLangMap[language];
-      try {
-        const pistonRes = await axios.post('https://emkc.org/api/v2/piston/execute', {
-          language: pistonLang.language,
-          version:  pistonLang.version,
-          files: [{ content: code }],
-          stdin: '', run_timeout: 6000, compile_timeout: 10000,
-        }, { timeout: 20000 });
-
-        const runResult  = pistonRes.data.run;
-        const compResult = pistonRes.data.compile;
-        result = {
-          stdout:   runResult?.stdout  || '',
-          stderr:   runResult?.stderr  || compResult?.stderr || '',
-          exitCode: runResult?.code    ?? 0,
-        };
-      } catch (pistonErr) {
-        result = {
-          stdout: '',
-          stderr: `Compiler service unavailable for ${language.toUpperCase()}. Try Python or JavaScript instead — they run locally without internet.`,
-          exitCode: 1,
-        };
+    } else if (language === 'cpp') {
+      // Local C++ Execution (requires g++ in PATH)
+      const executable = path.join(tmpDir, `ai_mentor_cpp_${Date.now()}.exe`);
+      const compileRes = await runShellCommand(`g++ "${tmpFile}" -o "${executable}"`, 10000);
+      
+      if (compileRes.exitCode === 0) {
+        result = await runShellCommand(`"${executable}"`);
+        try { fs.unlinkSync(executable); } catch (_) {}
+      } else {
+        // Compile failed or g++ missing
+        if (compileRes.stderr.toLowerCase().includes("'g++' is not recognized") || compileRes.stderr.includes("not found")) {
+          // Fallback to Piston if local g++ is missing
+          result = await tryRemoteExecution(language, code);
+        } else {
+          result = { stdout: '', stderr: compileRes.stderr, exitCode: 1 };
+        }
       }
+    } else if (language === 'java') {
+      // Local Java Execution (requires javac/java in PATH)
+      // Note: This assumes the class is 'Solution', matching starter code
+      const javaTmpDir = path.join(tmpDir, `java_${Date.now()}`);
+      try {
+        fs.mkdirSync(javaTmpDir);
+        const javaFile = path.join(javaTmpDir, 'Solution.java');
+        fs.writeFileSync(javaFile, code);
+        
+        const compileRes = await runShellCommand(`javac "${javaFile}"`, 10000);
+        if (compileRes.exitCode === 0) {
+          result = await runShellCommand(`java -cp "${javaTmpDir}" Solution`);
+        } else {
+          if (compileRes.stderr.toLowerCase().includes("'javac' is not recognized") || compileRes.stderr.includes("not found")) {
+            result = await tryRemoteExecution(language, code);
+          } else {
+            result = { stdout: '', stderr: compileRes.stderr, exitCode: 1 };
+          }
+        }
+      } catch (err) {
+        result = await tryRemoteExecution(language, code);
+      } finally {
+        try { fs.rmSync(javaTmpDir, { recursive: true, force: true }); } catch (_) {}
+      }
+    } else {
+      result = await tryRemoteExecution(language, code);
     }
 
     // Clean up temp file
