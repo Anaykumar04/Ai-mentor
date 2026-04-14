@@ -90,12 +90,27 @@ Analyze the code thoroughly.`;
     
     // Clean up potential markdown formatting from AI
     const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    const resultJson = JSON.parse(jsonStr);
+    let resultJson;
+    try {
+      resultJson = JSON.parse(jsonStr);
+    } catch (e) {
+      console.error('AI JSON Parse Error:', text);
+      throw new Error('AI returned invalid format');
+    }
 
     res.json(resultJson);
   } catch (error) {
-    console.error('Gemini Analysis Error:', error);
-    res.status(500).json({ error: 'AI Analysis Node Offline: Failed to communicate with Gemini' });
+    console.error('Gemini Analysis Error:', error.message);
+    res.status(200).json({ 
+      error: 'AI Analysis limited',
+      isSuccess: false,
+      errorFound: 'AI Mentor busy',
+      hints: ['Check your logic carefully'],
+      explanation: 'The AI Mentor is currently offline or busy. Try running your code again.',
+      optimizationTip: 'Focus on clean code structure.',
+      score: 50,
+      feedback: 'Keep going!'
+    });
   }
 };
 
@@ -114,6 +129,7 @@ const runShellCommand = (cmd, timeoutMs = 8000) => {
 
 exports.runCode = async (req, res) => {
   const { code, language = 'python' } = req.body;
+  console.log(`[EXEC] Running ${language} code...`);
 
   // Write code to a temp file
   const tmpDir  = os.tmpdir();

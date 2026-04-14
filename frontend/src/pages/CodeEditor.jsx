@@ -193,8 +193,10 @@ export default function CodeEditor() {
         setOutput(displayOutput + `\n\n━━━━ 🤖 AI REVIEW ━━━━\n📌 ${aiResult.errorFound || 'Logic may need improvement.'}\n\n→ Check AI Mentor panel for guidance`);
       }
     } catch (err) {
-      setOutput('❌ Execution failed. Check syntax and try again.');
-      await runGeminiAnalysis('Code failed to execute at compiler level', true);
+      console.error('Execution Error:', err);
+      const errorMsg = err.response?.data?.error || err.message || 'Check syntax and try again.';
+      setOutput(`❌ Execution failed: ${errorMsg}`);
+      await runGeminiAnalysis(`The code failed to execute. System error: ${errorMsg}`, true);
     } finally {
       setIsRunning(false);
     }
