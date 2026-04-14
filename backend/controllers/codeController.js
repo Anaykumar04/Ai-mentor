@@ -98,16 +98,63 @@ Analyze the code thoroughly.`;
 exports.runCode = async (req, res) => {
   try {
     const { code, language } = req.body;
+
+    // Language mapping for Piston API (free, no key required)
+    const pistonLangMap = {
+      python:     { language: 'python',     version: '3.10.0' },
+      javascript: { language: 'javascript', version: '18.15.0' },
+      java:       { language: 'java',       version: '15.0.2' },
+      cpp:        { language: 'c++',        version: '10.2.0' },
+    };
+
+    const pistonLang = pistonLangMap[language] || pistonLangMap['python'];
+
+    // Use Piston API — free, open-source, no API key required
+    const pistonResponse = await axios.post('https://emkc.org/api/v2/piston/execute', {
+      language: pistonLang.language,
+      version:  pistonLang.version,
+      files: [{ content: code }],
+      stdin: '',
+      run_timeout: 5000,
+      compile_timeout: 10000,
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000
+    });
+
+    const runResult = pistonResponse.data.run;
+    const compileResult = pistonResponse.data.compile;
+
+    // Determine output: stdout, stderr, or compile error
+    const stdout = runResult?.stdout || '';
+    const stderr = runResult?.stderr || compileResult?.stderr || '';
+    const exitCode = runResult?.code ?? 0;
+
+    return res.json({
+      stdout: stdout || null,
+      stderr: stderr || null,
+      compile_output: compileResult?.stderr || null,
+      status: {
+        id: exitCode === 0 ? 3 : 11,
+        description: exitCode === 0 ? 'Accepted' : 'Runtime Error'
+      }
+    });
+  } catch (err) {
+    console.error('Piston execution error:', err.message);
+    // Fallback if Piston is unreachable
+    return res.json({
+      stdout: null,
+      stderr: 'Code execution service temporarily unavailable. Please check your internet connection.',
+      status: { id: 13, description: 'Service Unavailable' }
+    });
+  }
+};
+
+// OLD Judge0 path (kept for future reference, replaced by Piston above)
+const _oldRunCodeWithJudge0 = async (req, res) => {
+  try {
+    const { code, language } = req.body;
     const languageId = languageMap[language] || 63;
-
-    if (!process.env.JUDGE0_API_KEY || process.env.JUDGE0_API_KEY === 'your_judge0_api_key_here') {
-      return res.json({
-        stdout: "Execution System in Simulation Mode: Output logs initialized.\n",
-        stderr: null,
-        status: { description: "Accepted (Simulated)" }
-      });
-    }
-
     const options = {
       method: 'POST',
       url: `${process.env.JUDGE0_URL}/submissions`,
