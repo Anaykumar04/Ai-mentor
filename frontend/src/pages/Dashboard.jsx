@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Activity, CheckCircle, XCircle, Terminal, Brain, BarChart3, Binary, Target, Zap, Cpu, GraduationCap, Award, BookOpen } from 'lucide-react';
 
-const API_URL = 'http://localhost:5000/api';
+const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000/api' : '/api';
 
 export default function Dashboard() {
   const [progress, setProgress] = useState([]);

@@ -8,7 +8,7 @@ import {
   TrendingUp, ShieldAlert, RotateCcw, ArrowRight
 } from 'lucide-react';
 
-const API_URL = 'http://localhost:5000/api';
+const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000/api' : '/api';
 
 const LANG_CONFIG = {
   python:     { label: 'Python 3.10',     monaco: 'python',     starter: '# Write your Python code here\n\n' },

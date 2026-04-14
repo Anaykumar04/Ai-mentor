@@ -18,7 +18,7 @@ import {
   X
 } from 'lucide-react';
 
-const API_URL = 'http://localhost:5000/api';
+const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000/api' : '/api';
 
 export default function Profile() {
   const [currentUser, setCurrentUser] = useState(JSON.parse(localStorage.getItem('user')) || {});

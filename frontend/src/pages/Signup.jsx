@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { Lock, User, ChevronRight, Cpu, Sparkles, UserPlus } from 'lucide-react';
 
+const API_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000/api' : '/api';
+
 export default function Signup() {
   const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');
@@ -19,7 +21,7 @@ export default function Signup() {
     // Security Node: Unique Admin Authority Protocol
     if (username.toLowerCase() === 'admin') {
       try {
-        const check = await axios.get('http://localhost:5000/api/leaderboard');
+        const check = await axios.get(`${API_URL}/leaderboard`);
         if (check.data.length > 0) {
           setError('Access Denied: Administrative Identity already established in system.');
           setLoading(false);
@@ -31,7 +33,7 @@ export default function Signup() {
     }
 
     try {
-      const res = await axios.post('http://localhost:5000/api/auth/register', { 
+      const res = await axios.post(`${API_URL}/auth/register`, { 
         fullName, 
         username, 
         password 
