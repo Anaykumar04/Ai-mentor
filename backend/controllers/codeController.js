@@ -1,4 +1,8 @@
 const axios = require('axios');
+const { exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const UserProgress = require('../models/UserProgress');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
@@ -95,119 +99,97 @@ Analyze the code thoroughly.`;
   }
 };
 
-exports.runCode = async (req, res) => {
-  try {
-    const { code, language } = req.body;
-
-    // Language mapping for Piston API (free, no key required)
-    const pistonLangMap = {
-      python:     { language: 'python',     version: '3.10.0' },
-      javascript: { language: 'javascript', version: '18.15.0' },
-      java:       { language: 'java',       version: '15.0.2' },
-      cpp:        { language: 'c++',        version: '10.2.0' },
-    };
-
-    const pistonLang = pistonLangMap[language] || pistonLangMap['python'];
-
-    // Use Piston API — free, open-source, no API key required
-    const pistonResponse = await axios.post('https://emkc.org/api/v2/piston/execute', {
-      language: pistonLang.language,
-      version:  pistonLang.version,
-      files: [{ content: code }],
-      stdin: '',
-      run_timeout: 5000,
-      compile_timeout: 10000,
-    }, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 15000
+// Helper: run a shell command and return { stdout, stderr, exitCode }
+const runShellCommand = (cmd, timeoutMs = 8000) => {
+  return new Promise((resolve) => {
+    exec(cmd, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({
+        stdout: stdout || '',
+        stderr: err ? (stderr || err.message) : (stderr || ''),
+        exitCode: err ? (err.code || 1) : 0,
+      });
     });
-
-    const runResult = pistonResponse.data.run;
-    const compileResult = pistonResponse.data.compile;
-
-    // Determine output: stdout, stderr, or compile error
-    const stdout = runResult?.stdout || '';
-    const stderr = runResult?.stderr || compileResult?.stderr || '';
-    const exitCode = runResult?.code ?? 0;
-
-    return res.json({
-      stdout: stdout || null,
-      stderr: stderr || null,
-      compile_output: compileResult?.stderr || null,
-      status: {
-        id: exitCode === 0 ? 3 : 11,
-        description: exitCode === 0 ? 'Accepted' : 'Runtime Error'
-      }
-    });
-  } catch (err) {
-    console.error('Piston execution error:', err.message);
-    // Fallback if Piston is unreachable
-    return res.json({
-      stdout: null,
-      stderr: 'Code execution service temporarily unavailable. Please check your internet connection.',
-      status: { id: 13, description: 'Service Unavailable' }
-    });
-  }
+  });
 };
 
-// OLD Judge0 path (kept for future reference, replaced by Piston above)
-const _oldRunCodeWithJudge0 = async (req, res) => {
-  try {
-    const { code, language } = req.body;
-    const languageId = languageMap[language] || 63;
-    const options = {
-      method: 'POST',
-      url: `${process.env.JUDGE0_URL}/submissions`,
-      params: { base64_encoded: 'false', fields: '*' },
-      headers: {
-        'content-type': 'application/json',
-        'X-RapidAPI-Key': process.env.JUDGE0_API_KEY,
-        'X-RapidAPI-Host': 'judge0-ce.p.rapidapi.com'
-      },
-      data: {
-        language_id: languageId,
-        source_code: code,
-      }
-    };
+exports.runCode = async (req, res) => {
+  const { code, language = 'python' } = req.body;
 
-    const submission = await axios.request(options);
-    const token = submission.data.token;
+  // Write code to a temp file
+  const tmpDir  = os.tmpdir();
+  const extMap  = { python: 'py', javascript: 'js', java: 'java', cpp: 'cpp' };
+  const ext     = extMap[language] || 'py';
+  const tmpFile = path.join(tmpDir, `ai_mentor_code_${Date.now()}.${ext}`);
+
+  try {
+    fs.writeFileSync(tmpFile, code, 'utf-8');
 
     let result;
-    let attempts = 0;
-    while (attempts < 10) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      const getOptions = {
-        method: 'GET',
-        url: `${process.env.JUDGE0_URL}/submissions/${token}`,
-        params: { base64_encoded: 'false', fields: '*' },
-        headers: {
-          'X-RapidAPI-Key': process.env.JUDGE0_API_KEY,
-          'X-RapidAPI-Host': 'judge0-ce.p.rapidapi.com'
-        }
-      };
-      
-      const checkRes = await axios.request(getOptions);
-      if (checkRes.data.status.id !== 1 && checkRes.data.status.id !== 2) {
-        result = checkRes.data;
-        break;
+
+    if (language === 'python') {
+      // Run Python locally
+      result = await runShellCommand(`python "${tmpFile}"`);
+      if (result.exitCode !== 0 && !result.stderr) {
+        // Try python3 if python doesn't work
+        result = await runShellCommand(`python3 "${tmpFile}"`);
       }
-      attempts++;
+    } else if (language === 'javascript') {
+      // Run JavaScript locally with Node.js
+      result = await runShellCommand(`node "${tmpFile}"`);
+    } else {
+      // For Java and C++ — use Piston API as they need a compiler
+      const pistonLangMap = {
+        java: { language: 'java', version: '15.0.2' },
+        cpp:  { language: 'c++',  version: '10.2.0' },
+      };
+      const pistonLang = pistonLangMap[language];
+      try {
+        const pistonRes = await axios.post('https://emkc.org/api/v2/piston/execute', {
+          language: pistonLang.language,
+          version:  pistonLang.version,
+          files: [{ content: code }],
+          stdin: '', run_timeout: 6000, compile_timeout: 10000,
+        }, { timeout: 20000 });
+
+        const runResult  = pistonRes.data.run;
+        const compResult = pistonRes.data.compile;
+        result = {
+          stdout:   runResult?.stdout  || '',
+          stderr:   runResult?.stderr  || compResult?.stderr || '',
+          exitCode: runResult?.code    ?? 0,
+        };
+      } catch (pistonErr) {
+        result = {
+          stdout: '',
+          stderr: `Compiler service unavailable for ${language.toUpperCase()}. Try Python or JavaScript instead — they run locally without internet.`,
+          exitCode: 1,
+        };
+      }
     }
 
-    if (!result) {
-      return res.status(504).json({ error: 'Timeout waiting for Judge0' });
-    }
+    // Clean up temp file
+    try { fs.unlinkSync(tmpFile); } catch (_) {}
 
-    res.json({
-      stdout: result.stdout,
-      stderr: result.stderr,
-      compile_output: result.compile_output,
-      status: result.status,
+    const hasError = result.exitCode !== 0 || !!result.stderr;
+
+    return res.json({
+      stdout:         result.stdout  || null,
+      stderr:         result.stderr  || null,
+      compile_output: null,
+      status: {
+        id:          hasError ? 11 : 3,
+        description: hasError ? 'Runtime Error' : 'Accepted',
+      }
     });
-  } catch (error) {
-    console.error('Error running code:', error);
-    res.status(500).json({ error: 'Failed to execute code' });
+
+  } catch (err) {
+    try { fs.unlinkSync(tmpFile); } catch (_) {}
+    console.error('Local execution error:', err.message);
+    return res.json({
+      stdout: null,
+      stderr: `Execution error: ${err.message}`,
+      status: { id: 13, description: 'Internal Error' }
+    });
   }
 };
 
